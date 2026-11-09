@@ -1,0 +1,8 @@
+streamlit
+groq
+ddgs
+beautifulsoup4
+requests
+SpeechRecognition
+gTTS
+fpdf2
