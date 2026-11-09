@@ -1,6 +1,7 @@
 import io
 import re
 import time
+import os
 import contextlib
 import requests
 from bs4 import BeautifulSoup
@@ -12,13 +13,13 @@ except ImportError:
     from duckduckgo_search import DDGS
 
 # ---------- SETTINGS ----------
-import os
 try:
     import streamlit as st
     GROQ_KEY = st.secrets["GROQ_API_KEY"]
 except Exception:
     GROQ_KEY = os.environ.get("GROQ_API_KEY", "")
-PAGES_PER_QUESTION = 2
+
+PAGES_PER_QUESTION = 3
 PAGE_CHARS = 2500
 SKIP_SITES = ["youtube.com", "youtu.be", "facebook.com", "instagram.com",
               "twitter.com", "x.com", "linkedin.com", "pinterest.com",
@@ -36,15 +37,12 @@ client = Groq(api_key=GROQ_KEY)
 
 
 def pick_model():
-    # Reasoning models ko skip karta hai, kyunki wo khali jawab de sakte hain
     try:
         ids = [m.id for m in client.models.list().data]
     except Exception:
         return "llama-3.3-70b-versatile"
-
     skip_words = ["guard", "whisper", "tts", "embed", "prompt", "gpt-oss", "reason", "distil"]
     candidates = [i for i in ids if not any(w in i.lower() for w in skip_words)]
-
     preferred = ["llama-3.3-70b", "llama-3.1-70b", "70b", "qwen", "versatile", "instant", "llama"]
     for word in preferred:
         for c in candidates:
@@ -109,10 +107,15 @@ def search_web(query, seen_urls):
                 continue
             if any(site in url for site in SKIP_SITES):
                 continue
-            results.append({"title": r.get("title", ""), "url": url})
+            results.append({
+                "title": r.get("title", ""),
+                "url": url,
+                "snippet": r.get("body", ""),
+            })
             if len(results) == PAGES_PER_QUESTION:
                 break
     return results
+
 
 def read_page(url):
     try:
@@ -131,16 +134,18 @@ def read_page(url):
         return ""
 
 
-def make_notes(sub_question, page_text, url):
-    if len(page_text) < 100:
+def make_notes(sub_question, page_text, url, snippet=""):
+    # Agar page se text na mile, to search ka snippet use karo
+    source_text = page_text if len(page_text) >= 100 else snippet
+    if len(source_text) < 40:
         return ""
     prompt = f"""Sawaal: "{sub_question}"
-Neeche diye text se is sawaal ke 2-3 points likho.
+Neeche diye text se is sawaal ke 2 points likho.
 Har point ke end mein likho: (Source: {url})
-Agar text mein is sawaal se related jaankari nahi hai to sirf likho: NO_INFO
+Agar text mein is sawaal se related kuch bhi nahi hai to sirf likho: NO_INFO
 
 Text:
-{page_text}"""
+{source_text}"""
     answer = ask_ai(prompt, max_tokens=400)
     if not answer or "NO_INFO" in answer:
         return ""
@@ -189,7 +194,9 @@ def research(question):
             seen_urls.add(r["url"])
             print(f"   3. Padh raha hoon: {r['url']}")
             text = read_page(r["url"])
-            notes = make_notes(sq, text, r["url"])
+            if len(text) < 100:
+                print("      (page block ya khaali, search snippet use kar raha hoon)")
+            notes = make_notes(sq, text, r["url"], r.get("snippet", ""))
             if notes:
                 all_notes += f"\n\n[{sq}]\n{notes}"
                 if r["url"] not in all_sources:
@@ -208,11 +215,10 @@ def research(question):
 
     print(final)
     print(f"\nKul time: {int(time.time() - start)} seconds")
-    print("(Report 'report.txt' file mein bhi save ho gaya hai)")
-    return final 
+    return final
+
 
 def run_research(question):
-    # Streamlit ke liye: saara print output ek string mein wapas deta hai
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         research(question)
